@@ -243,10 +243,24 @@ def run_diffusion_training():
         save_best_only=True,
     )
     
-    # Wrap plot_images for callback
-    plot_cb = keras.callbacks.LambdaCallback(
-        on_epoch_end=lambda epoch, logs: diffusion_model.plot_images(valid_data)
-    )
+    # 新的條件式繪圖 Callback
+    def conditional_plot(epoch, logs):
+        # 從 logs 取得驗證集的 KID 分數
+        # 注意：Keras 的驗證集 metric 通常會加上 "val_" 前綴
+        current_kid = logs.get("val_kid")
+        
+        # 打印當前 KID 方便確認
+        print(f"\nEpoch {epoch + 1}: val_kid = {current_kid:.4f}")
+
+        # 設定你的閾值 (例如 < 1.0 或更低，通常 0.05 以下才算不錯)
+        TARGET_KID = 0.8 
+
+        if current_kid is not None and current_kid < TARGET_KID:
+            diffusion_model.plot_images(valid_data)
+        else:
+            print(f"💤 KID ({current_kid:.4f}) still high (>= {TARGET_KID}), skipping generation to save time.")
+
+    plot_cb = keras.callbacks.LambdaCallback(on_epoch_end=conditional_plot)
 
     print("[Main] Starting Diffusion Training...")
     diffusion_model.fit(
