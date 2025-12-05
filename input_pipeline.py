@@ -105,14 +105,24 @@ def dataset_generator(filenames, batch_size, train_size, save_embeding_path, roo
     # load the training data
     df = pd.read_pickle(filenames)
     seq_emb = np.load(save_embeding_path)
-    seq_emb = np.squeeze(seq_emb, axis=1) 
     
+    # 自動處理維度
+    # 情況 1: (N, 1, 77, 768) -> squeeze -> (N, 77, 768)
+    if seq_emb.ndim == 4 and seq_emb.shape[1] == 1:
+        seq_emb = np.squeeze(seq_emb, axis=1)
+    # 情況 2: (N, 5, 1, 77, 768) -> squeeze -> (N, 5, 77, 768) (您的檔案是這個形狀)
+    elif seq_emb.ndim == 5 and seq_emb.shape[2] == 1:
+        seq_emb = np.squeeze(seq_emb, axis=2)
+    
+    # 檢查是否為多 Caption 模式: (N, Caps, 77, 768)
+    has_multiple_captions = (seq_emb.ndim == 4 and seq_emb.shape[1] > 1)
+
     # 路徑處理
     df['ImagePath'] = df['ImagePath'].str.replace('^\\.', '', regex=True)
     image_paths = root_dir + df['ImagePath'].values
     
     # 切分資料索引
-    N, _, _ = seq_emb.shape
+    N = seq_emb.shape[0]
     split_idx = int(N * train_size)
     
     seq_train = seq_emb[:split_idx]        
@@ -121,26 +131,41 @@ def dataset_generator(filenames, batch_size, train_size, save_embeding_path, roo
     seq_val = seq_emb[split_idx:]          
     img_val = image_paths[split_idx:]
     
-    # --- 建立 Training Dataset (使用 process_train_data) ---
+    # --- 定義 Mapping Wrapper ---
+    if has_multiple_captions:
+        # 如果有多個 caption，訓練時隨機選一個
+        def train_map_wrapper(seq_emb_all, image_path):
+            num_caps = tf.shape(seq_emb_all)[0]
+            idx = tf.random.uniform([], 0, num_caps, dtype=tf.int32)
+            seq_emb = seq_emb_all[idx]
+            return process_train_data(seq_emb, image_path)
+            
+        def val_map_wrapper(seq_emb_all, image_path):
+            # 驗證時固定選第一個，保持穩定
+            seq_emb = seq_emb_all[0]
+            return process_val_data(seq_emb, image_path)
+    else:
+        # 單一 caption 直接傳遞
+        train_map_wrapper = process_train_data
+        val_map_wrapper = process_val_data
+
+    # --- 建立 Training Dataset ---
     assert seq_train.shape[0] == img_train.shape[0]
     train_data = tf.data.Dataset.from_tensor_slices((seq_train, img_train))
-    # 這裡使用 process_train_data
-    train_data = train_data.map(process_train_data, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    train_data = train_data.map(train_map_wrapper, num_parallel_calls=tf.data.experimental.AUTOTUNE)
     train_data = train_data.shuffle(len(seq_train)).batch(batch_size, drop_remainder=True)
     train_data = train_data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
     
-    # --- 建立 Validation Dataset (使用 process_val_data) ---
+    # --- 建立 Validation Dataset ---
     assert seq_val.shape[0] == img_val.shape[0]
     val_data = tf.data.Dataset.from_tensor_slices((seq_val, img_val))
-    # 這裡使用 process_val_data (不做增強，確保驗證公平性)
-    val_data = val_data.map(process_val_data, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    val_data = val_data.map(val_map_wrapper, num_parallel_calls=tf.data.experimental.AUTOTUNE)
     val_data = val_data.shuffle(len(seq_val)).batch(batch_size, drop_remainder=True)
     val_data = val_data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
     
-    # --- 建立 Full Dataset (通常不需要增強，或視需求而定) ---
-    # 這裡我預設全量數據不做增強，如果這是用來最終訓練的，可以改用 process_train_data
+    # --- 建立 Full Dataset ---
     dataset = tf.data.Dataset.from_tensor_slices((seq_emb, image_paths))
-    dataset = dataset.map(process_val_data, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    dataset = dataset.map(val_map_wrapper, num_parallel_calls=tf.data.experimental.AUTOTUNE) # 使用 val 邏輯
     dataset = dataset.shuffle(len(seq_emb)).batch(batch_size, drop_remainder=True)
     dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
     

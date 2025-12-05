@@ -1,3 +1,5 @@
 .gemini
 dataset/
 __pycache__/
+seqemb/
+test_emb.py
