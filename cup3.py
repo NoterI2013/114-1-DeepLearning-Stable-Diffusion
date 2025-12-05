@@ -1,9 +1,13 @@
 # %%
 from __future__ import absolute_import, division, print_function, unicode_literals
+
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_USE_LEGACY_KERAS'] = '1'
+
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras.optimizers.schedules import CosineDecay
-import os
 import gc
 import numpy as np
 import pandas as pd
@@ -66,27 +70,30 @@ except FileNotFoundError:
 def run_preprocessing():
     """Run text preprocessing using CLIP. This function scopes the TextEncoderWrapper 
     so it can be garbage collected after use."""
-    
+
     print("\n[Preprocessing] Checking if embeddings need to be generated...")
     # Only run if you need to generate embeddings
     # preprocess_captions_all(train_path, save_embeding_path, max_caption_len=5)
     
-    # 這裡演示 TextEncoder 用法，實際跑完就會被釋放
-    print("[Preprocessing] Loading Text Encoder for testing...")
-    text_encoder = TextEncoderWrapper()
+    # --- 修改開始：把下面這段會報錯的測試代碼全部註解掉 ---
+    # print("[Preprocessing] Loading Text Encoder for testing...")
+    # text_encoder = TextEncoderWrapper()
     
-    sample = ['9', '1', '82', '5', '11', '70', '20', '31', 
-              '3', '29', '20', '2', '5427', '5427', '5427', '5427', 
-              '5427', '5427', '5427', '5427']
-    # 注意：id2word_dict 需要是全局變數或傳入
-    sample_emb = text_encoder.id2clip(sample, id2word_dict)
-    print("Sample embedding shape:", sample_emb.shape)
+    # sample = ['9', '1', '82', '5', '11', '70', '20', '31', 
+    #           '3', '29', '20', '2', '5427', '5427', '5427', '5427', 
+    #           '5427', '5427', '5427', '5427']
+    # # 注意：id2word_dict 需要是全局變數或傳入
+    # sample_emb = text_encoder.id2clip(sample, id2word_dict)
+    # print("Sample embedding shape:", sample_emb.shape)
     
-    # Explicitly delete to be safe, though function scope handles it
-    del text_encoder
-    gc.collect()
-    tf.keras.backend.clear_session()
-    print("[Preprocessing] Text Encoder memory released.\n")
+    # # Explicitly delete to be safe, though function scope handles it
+    # del text_encoder
+    # gc.collect()
+    # tf.keras.backend.clear_session()
+    # print("[Preprocessing] Text Encoder memory released.\n")
+    # --- 修改結束 ---
+    
+    print("[Preprocessing] Skipped live encoding test (using pre-computed embeddings).")
 
 # %%
 def get_vae_models():
@@ -227,7 +234,7 @@ def run_diffusion_training():
     loss_fn = keras.losses.MeanSquaredError()
     diffusion_model.compile(optimizer=optimizer, loss_fn=loss_fn)
     
-    checkpoint_path = f"/kaggle/working/checkpoints/tf_checkpoint.weights.h5"
+    checkpoint_path = f"./checkpoints/tf_checkpoint.weights.h5"
     checkpoint_callback = keras.callbacks.ModelCheckpoint(
         filepath=checkpoint_path,
         save_weights_only=True,

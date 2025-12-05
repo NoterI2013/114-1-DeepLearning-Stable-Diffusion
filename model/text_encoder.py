@@ -7,7 +7,8 @@ class TextEncoderWrapper:
     def __init__(self, clip_version="openai/clip-vit-large-patch14"):
         self.clip_version = clip_version
         self.clip_tokenizer = CLIPTokenizer.from_pretrained(clip_version)
-        self.clip_text_encoder = TFCLIPTextModel.from_pretrained(clip_version)
+        # self.clip_text_encoder = TFCLIPTextModel.from_pretrained(clip_version, from_pt=True, use_safetensors=False)
+        self.clip_text_encoder = TFCLIPTextModel.from_pretrained(clip_version, from_pt=True, use_safetensors=True)
         self.clip_text_encoder.trainable = False
 
     def id2Sent(self, id_list, id2word_dict):

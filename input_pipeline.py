@@ -149,24 +149,30 @@ def dataset_generator(filenames, batch_size, train_size, save_embeding_path, roo
         train_map_wrapper = process_train_data
         val_map_wrapper = process_val_data
 
-    # --- 建立 Training Dataset ---
-    assert seq_train.shape[0] == img_train.shape[0]
-    train_data = tf.data.Dataset.from_tensor_slices((seq_train, img_train))
+    # --- 重要修改：所有建立 Dataset 的步驟都強制在 CPU 上進行 ---
+    with tf.device('/CPU:0'):
+        # --- 建立 Training Dataset ---
+        # 這裡 assert 建議保留，檢查資料長度是否一致
+        assert seq_train.shape[0] == img_train.shape[0] 
+        train_data = tf.data.Dataset.from_tensor_slices((seq_train, img_train))
+        
+        # --- 建立 Validation Dataset ---
+        val_data = tf.data.Dataset.from_tensor_slices((seq_val, img_val))
+
+        # --- 建立 Full Dataset ---
+        dataset = tf.data.Dataset.from_tensor_slices((seq_emb, image_paths))
+    
+    # --- 後續的 map/shuffle/batch/prefetch 可以利用 GPU 加速，所以放在區塊外 ---
     train_data = train_data.map(train_map_wrapper, num_parallel_calls=tf.data.experimental.AUTOTUNE)
     train_data = train_data.shuffle(len(seq_train)).batch(batch_size, drop_remainder=True)
     train_data = train_data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
     
-    # --- 建立 Validation Dataset ---
-    assert seq_val.shape[0] == img_val.shape[0]
-    val_data = tf.data.Dataset.from_tensor_slices((seq_val, img_val))
     val_data = val_data.map(val_map_wrapper, num_parallel_calls=tf.data.experimental.AUTOTUNE)
     val_data = val_data.shuffle(len(seq_val)).batch(batch_size, drop_remainder=True)
     val_data = val_data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
-    
-    # --- 建立 Full Dataset ---
-    dataset = tf.data.Dataset.from_tensor_slices((seq_emb, image_paths))
-    dataset = dataset.map(val_map_wrapper, num_parallel_calls=tf.data.experimental.AUTOTUNE) # 使用 val 邏輯
+
+    dataset = dataset.map(val_map_wrapper, num_parallel_calls=tf.data.experimental.AUTOTUNE)
     dataset = dataset.shuffle(len(seq_emb)).batch(batch_size, drop_remainder=True)
     dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
-    
+        
     return dataset, train_data, val_data

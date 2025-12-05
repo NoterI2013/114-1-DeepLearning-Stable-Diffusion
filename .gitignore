@@ -3,3 +3,6 @@ dataset/
 __pycache__/
 seqemb/
 test_emb.py
+.ipynb_checkpoints/
+checkpoints/
+
