@@ -403,8 +403,16 @@ class LatentDiffusionTrainer(keras.Model):
 
     def plot_images(self, valid_data, draw_diffusion_steps=30, num_rows=2, num_cols=8, figsize=(12, 5)):
         
-        val_seq_emb_batch,_= next(iter(valid_data))
-        batch_size = num_rows * num_cols
+        val_seq_emb_batch, _ = next(iter(valid_data))
+        
+        # Ensure batch compatibility by slicing the validation embedding
+        target_batch_size = num_rows * num_cols
+        if tf.shape(val_seq_emb_batch)[0] > target_batch_size:
+            val_seq_emb_batch = val_seq_emb_batch[:target_batch_size]
+        
+        # Update batch_size in case validation batch is smaller than target
+        batch_size = tf.shape(val_seq_emb_batch)[0]
+        
         generated_samples = self.generate_images(batch_size, draw_diffusion_steps, val_seq_emb_batch)
         generated_samples = generated_samples.numpy()
         total_imgs = generated_samples.shape[0]

@@ -21,6 +21,7 @@ from model.text_encoder import TextEncoderWrapper
 import input_pipeline
 from trainer import VAETrainer, LatentDiffusionTrainer
 
+
 # %%
 # Hardware Setup
 def setup_hardware():
@@ -41,6 +42,7 @@ def setup_hardware():
 
 setup_hardware()
 
+
 # %%
 ROOT = './dataset'
 VOCAB = '/dictionary/id2Word.npy'
@@ -49,12 +51,14 @@ ID2WORD = '/dictionary/id2Word.npy'
 TRAIN = '/dataset/text2ImgData.pkl'
 TEST = '/dataset/testData.pkl'
 
+
 # %%
 train_path = ROOT+TRAIN
 vocab_path = ROOT+VOCAB
 word2_id_path = ROOT+WORD2ID
 id2_word_path = ROOT+ID2WORD
 save_embeding_path = "./seqemb/seq_emb_multi.npy"
+
 
 # %%
 # Load Dictionaries (Global as they are small and needed everywhere)
@@ -66,6 +70,7 @@ try:
 except FileNotFoundError:
     print("Warning: Dictionaries not found. Proceeding assuming they might not be needed immediately if re-generating embeddings.")
 
+
 # %%
 def run_preprocessing():
     """Run text preprocessing using CLIP. This function scopes the TextEncoderWrapper 
@@ -75,7 +80,6 @@ def run_preprocessing():
     # Only run if you need to generate embeddings
     # preprocess_captions_all(train_path, save_embeding_path, max_caption_len=5)
     
-    # --- 修改開始：把下面這段會報錯的測試代碼全部註解掉 ---
     # print("[Preprocessing] Loading Text Encoder for testing...")
     # text_encoder = TextEncoderWrapper()
     
@@ -91,9 +95,9 @@ def run_preprocessing():
     # gc.collect()
     # tf.keras.backend.clear_session()
     # print("[Preprocessing] Text Encoder memory released.\n")
-    # --- 修改結束 ---
     
     print("[Preprocessing] Skipped live encoding test (using pre-computed embeddings).")
+
 
 # %%
 def get_vae_models():
@@ -126,6 +130,7 @@ def get_vae_models():
     
     vae = AutoencoderKL(encoder, decoder, latent_channels=4, scaling_factor=0.18215)
     return vae, encoder_model, decoder_model
+
 
 # %%
 def run_vae_training(vae, BATCH_SIZE=16):
@@ -166,6 +171,7 @@ def run_vae_training(vae, BATCH_SIZE=16):
     gc.collect()
     tf.keras.backend.clear_session()
     print("[VAE Training] Memory cleared.\n")
+
 
 # %%
 def run_diffusion_training(batch_size = 32, total_epochs = 50, continue_training = False):
@@ -237,9 +243,21 @@ def run_diffusion_training(batch_size = 32, total_epochs = 50, continue_training
     # 檢查並載入權重
     if continue_training and os.path.exists(checkpoint_path):
         print(f"Found checkpoint at {checkpoint_path}, loading weights to resume training...")
+        
+        # 強制 Build KID
+        try:
+            print("Force building KID layer to match checkpoint structure...")
+            # 建立假圖片數據 (Batch=1, Size=128x128, Channels=3)
+            dummy_img = tf.zeros((1, 128, 128, 3))
+            # 戳一下 update_state，強迫 InceptionV3 初始化權重
+            diffusion_model.kid.update_state(dummy_img, dummy_img)
+            print("KID layer built successfully.")
+        except Exception as e:
+            print(f"Warning: Failed to force build KID: {e}")
+        
         try:
             # 因為是 save_weights_only=True，所以用 load_weights
-            diffusion_model.load_weights(checkpoint_path)
+            diffusion_model.load_weights(checkpoint_path, skip_mismatch=True)
             print("Weights loaded successfully!")
         except Exception as e:
             print(f"Failed to load weights: {e}")
@@ -258,13 +276,11 @@ def run_diffusion_training(batch_size = 32, total_epochs = 50, continue_training
     # 新的條件式繪圖 Callback
     def conditional_plot(epoch, logs):
         # 從 logs 取得驗證集的 KID 分數
-        # 注意：Keras 的驗證集 metric 通常會加上 "val_" 前綴
         current_kid = logs.get("val_kid")
         
-        # 打印當前 KID 方便確認
         print(f"\nEpoch {epoch + 1}: val_kid = {current_kid:.4f}")
 
-        # 設定你的閾值 (例如 < 1.0 或更低，通常 0.05 以下才算不錯)
+        # 設定你的閾值 (例如 < 1.0 或更低)
         TARGET_KID = 0.8 
 
         if current_kid is not None and current_kid < TARGET_KID:
@@ -283,6 +299,7 @@ def run_diffusion_training(batch_size = 32, total_epochs = 50, continue_training
         verbose=2
     )
 
+
 # %%
 if __name__ == "__main__":
     # Prevent memory fragmentation
@@ -292,3 +309,5 @@ if __name__ == "__main__":
     TOTAL_EPOCHS = 50
     # Run the main pipeline
     run_diffusion_training(BATCH_SIZE, TOTAL_EPOCHS, continue_training=True)
+
+# %%
