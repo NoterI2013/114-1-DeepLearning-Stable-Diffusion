@@ -168,17 +168,16 @@ def run_vae_training(vae, BATCH_SIZE=16):
     print("[VAE Training] Memory cleared.\n")
 
 # %%
-def run_diffusion_training():
+def run_diffusion_training(batch_size = 32, total_epochs = 50, continue_training = False):
     """Main Diffusion Training Loop"""
     
     # 1. Preprocessing (Optional, ensures clean state)
     run_preprocessing()
     
     # 2. Load Dataset
-    BATCH_SIZE = 32
     print("[Main] Loading Dataset...")
     dataset, train_data, valid_data = input_pipeline.dataset_generator(
-        train_path, BATCH_SIZE, 0.8, save_embeding_path, ROOT
+        train_path, batch_size, 0.8, save_embeding_path, ROOT
     )
     
     # 3. Load VAE (Needed for Diffusion Training execution - encoding images)
@@ -210,9 +209,8 @@ def run_diffusion_training():
     # Checking trainer.py: self.vae_encoder(images) -> expects Keras Model or Layer
     diffusion_model = LatentDiffusionTrainer(unet, ema_unet, encoder_model, decoder_model)
     
-    TOTAL_EPOCHS = 50
     EPOCH_STEPS = 460 # Adjust based on dataset size
-    TOTAL_STEPS = TOTAL_EPOCHS * EPOCH_STEPS
+    TOTAL_STEPS = total_epochs * EPOCH_STEPS
     WARMUP_RATIO = 0.1
     WARMUP_STEPS = int(TOTAL_STEPS * WARMUP_RATIO)
     INITIAL_LR = 1e-4
@@ -235,6 +233,20 @@ def run_diffusion_training():
     diffusion_model.compile(optimizer=optimizer, loss_fn=loss_fn)
     
     checkpoint_path = f"./checkpoints/tf_checkpoint.weights.h5"
+
+    # 檢查並載入權重
+    if continue_training and os.path.exists(checkpoint_path):
+        print(f"Found checkpoint at {checkpoint_path}, loading weights to resume training...")
+        try:
+            # 因為是 save_weights_only=True，所以用 load_weights
+            diffusion_model.load_weights(checkpoint_path)
+            print("Weights loaded successfully!")
+        except Exception as e:
+            print(f"Failed to load weights: {e}")
+            print("Starting training from scratch.")
+    else:
+        print("No checkpoint found. Starting training from scratch.")
+
     checkpoint_callback = keras.callbacks.ModelCheckpoint(
         filepath=checkpoint_path,
         save_weights_only=True,
@@ -264,14 +276,11 @@ def run_diffusion_training():
 
     print("[Main] Starting Diffusion Training...")
     diffusion_model.fit(
-        dataset, # Should likely be train_data? The original code used 'dataset' which was full data?? 
-                 # Original code: dataset, train_data, valid_data = ... ; fit(dataset, ...)
-                 # dataset from generator is full dataset with validation mapping? 
-                 # Checking input_pipeline: dataset is full, train_data is partial. 
-                 # Usually fit on train_data. I will use 'train_data' to be safe and correct.
+        dataset, 
         validation_data=valid_data,
-        epochs=TOTAL_EPOCHS,
+        epochs=total_epochs,
         callbacks=[plot_cb, checkpoint_callback],
+        verbose=2
     )
 
 # %%
@@ -279,5 +288,7 @@ if __name__ == "__main__":
     # Prevent memory fragmentation
     os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
     
+    BATCH_SIZE = 32
+    TOTAL_EPOCHS = 50
     # Run the main pipeline
-    run_diffusion_training()
+    run_diffusion_training(BATCH_SIZE, TOTAL_EPOCHS, continue_training=True)
