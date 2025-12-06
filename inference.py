@@ -28,6 +28,7 @@ hparas = {
 
 SEQ_EMB_PATH = './seqemb/seq_emb_test.npy'
 TEST_DATA_PATH = './dataset/dataset/testData.pkl'
+ID2WORD_PATH = './dataset/dictionary/id2Word.npy'
 CHECKPOINT_DIR = './checkpoints'
 CHECKPOINT_PATH = f"{CHECKPOINT_DIR}/tf_checkpoint.weights.h5"
 OUTPUT_DIR = './inference/demo'
@@ -111,20 +112,31 @@ def build_diffusion_model():
 def load_checkpoint(diffusion_model, path):
     if os.path.exists(path):
         print(f"[Checkpoint] Loading weights from {path}...")
+        
+        # Debug: Check weights before
+        sample_weight_before = diffusion_model.unet.weights[0].numpy()
+        
         try:
-            # Force KID build if necessary for loading (though for inference strictly it might not be needed if variables match)
-             # But LatentDiffusionTrainer structure includes KID metric so load_weights might complain if layers don't match
+            # Force KID build
             dummy_img = tf.zeros((1, 128, 128, 3))
             diffusion_model.kid.update_state(dummy_img, dummy_img)
             
             diffusion_model.load_weights(path, skip_mismatch=True)
-            print("[Checkpoint] Loaded successfully.")
+            
+            # Debug: Check weights after
+            sample_weight_after = diffusion_model.unet.weights[0].numpy()
+            diff = np.abs(sample_weight_after - sample_weight_before).sum()
+            if diff == 0:
+                print(f"[Checkpoint] WARNING: Weights did not change! Load might have failed silently or checkpoint is empty.")
+            else:
+                print(f"[Checkpoint] Success. Weights changed (Diff sum: {diff:.4f}).")
+                
             return True
         except Exception as e:
             print(f"[Checkpoint] Failed to load: {e}")
             return False
     else:
-        print(f"[Checkpoint] File not found: {path}")
+        print(f"[Checkpoint] File not found: {path} (Current CWD: {os.getcwd()})")
         return False
 
 # %%
@@ -203,8 +215,19 @@ def inference_testset(diffusion_model, output_folder=OUTPUT_DIR):
             
     print(f"[Inference] Finished. Time taken: {time.time() - start_time:.2f}s")
 
+# --- Helper Functions ---
+def decode_caption(caption_ids, id2word_dict):
+    text = []
+    # caption_ids might be numpy array of ints
+    for idx in caption_ids:
+        # Convert to string key for lookup
+        word = id2word_dict.get(str(int(idx)), '')
+        if word and word not in ['<PAD>', '<RARE>', '<start>', '<end>']:
+            text.append(word)
+    return ' '.join(text)
+
 # %%
-def inference_one(idx_to_infer, diffusion_model=None, captions_emb=None, dataset_df=None):
+def inference_one(idx_to_infer, diffusion_model=None, captions_emb=None, dataset_df=None, id2word_dict=None):
     """
     Generate image for a single specific ID from the test set and display it.
     idx_to_infer can be an integer index or a specific ID string depending on dataset.
@@ -228,6 +251,14 @@ def inference_one(idx_to_infer, diffusion_model=None, captions_emb=None, dataset
     if dataset_df is None:
         print("[Inference] Loading dataframe (uncached)...")
         dataset_df = pd.read_pickle(TEST_DATA_PATH)
+        
+    if id2word_dict is None:
+        print("[Inference] Loading dictionary (uncached)...")
+        if os.path.exists(ID2WORD_PATH):
+            id2word_dict = dict(np.load(ID2WORD_PATH))
+        else:
+            print(f"Warning: {ID2WORD_PATH} not found. Captions will remain encoded.")
+            id2word_dict = {}
     
     data = dataset_df # alias
     
@@ -251,7 +282,10 @@ def inference_one(idx_to_infer, diffusion_model=None, captions_emb=None, dataset
         return
 
     target_emb = captions_emb[target_idx]
-    target_text = data.iloc[target_idx]['Captions'] if 'Captions' in data.columns else "Unknown Caption"
+    
+    # Get raw caption IDs
+    target_caption_ids = data.iloc[target_idx]['Captions'] if 'Captions' in data.columns else []
+    target_text = decode_caption(target_caption_ids, id2word_dict) if len(target_caption_ids) > 0 else "Unknown"
     
     # Add batch dimension
     target_emb = tf.expand_dims(target_emb, 0) # (1, 77, 768)
@@ -263,6 +297,202 @@ def inference_one(idx_to_infer, diffusion_model=None, captions_emb=None, dataset
     
     # Display
     print(f"Caption: {target_text}")
+    print(f"Raw IDs (first 10): {target_caption_ids[:10] if hasattr(target_caption_ids, '__iter__') else target_caption_ids}")
+    plt.figure(figsize=(6, 6))
+    plt.imshow(generated_image)
+    plt.title(f"Generated Image (ID: {idx_to_infer})\n{target_text[:50]}...")
+    plt.axis('off')
+    
+    out_path = f"inference_{idx_to_infer}_single.jpg"
+    plt.savefig(out_path)
+    print(f"Saved inference result to {out_path}")
+    plt.show()
+
+# %%
+if __name__ == "__main__":
+    # 1. Unified Model Loading
+    print("[Main] Initializing Model...")
+    diffusion_model = build_diffusion_model()
+    load_checkpoint(diffusion_model, CHECKPOINT_PATH)
+    
+    # 2. Choose Mode
+    
+    # --- Mode A: Full Test Set Inference ---
+    # inference_testset(diffusion_model)
+    
+    # --- Mode B: Single/Loop Inference ---
+    # Pre-load data for single inference efficiency (optional for full testset as it uses tf.dataset)
+    print("[Main] Pre-loading data for single inference...")
+    if os.path.exists(SEQ_EMB_PATH):
+        all_captions_emb = np.load(SEQ_EMB_PATH)
+        if all_captions_emb.ndim == 4 and all_captions_emb.shape[1] == 1:
+            return True
+        except Exception as e:
+            print(f"[Checkpoint] Failed to load: {e}")
+            return False
+    else:
+        print(f"[Checkpoint] File not found: {path} (Current CWD: {os.getcwd()})")
+        return False
+
+# %%
+# --- Data Loading ---
+def testing_dataset_generator(batch_size):
+    # Load Embeddings
+    print(f"[Data] Loading embeddings from {SEQ_EMB_PATH}...")
+    if not os.path.exists(SEQ_EMB_PATH):
+        raise FileNotFoundError(f"{SEQ_EMB_PATH} not found.")
+    
+    captions_emb = np.load(SEQ_EMB_PATH)
+    # Shape check: (819, 77, 768)
+    print(f"[Data] Embeddings shape: {captions_emb.shape}")
+    
+    # Handle dimensions if needed (similar to input_pipeline)
+    if captions_emb.ndim == 4 and captions_emb.shape[1] == 1:
+        captions_emb = np.squeeze(captions_emb, axis=1)
+    elif captions_emb.ndim == 5 and captions_emb.shape[2] == 1:
+        captions_emb = np.squeeze(captions_emb, axis=2)
+
+    captions_emb = captions_emb.astype(np.float32)
+
+    # Load IDs
+    print(f"[Data] Loading IDs from {TEST_DATA_PATH}...")
+    data = pd.read_pickle(TEST_DATA_PATH)
+    # Assuming 'ID' column exists or index is ID
+    # User snippet: index = data['ID'].values
+    if 'ID' in data.columns:
+        index = data['ID'].values
+    else:
+        print("[Data] 'ID' column not found, using index as ID.")
+        index = data.index.values
+        
+    index = np.asarray(index)
+    
+    dataset = tf.data.Dataset.from_tensor_slices((captions_emb, index))
+    dataset = dataset.batch(batch_size)
+    return dataset, len(index)
+
+# %%
+# --- Inference Functions ---
+def inference_testset(diffusion_model, output_folder=OUTPUT_DIR):
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+        
+    print("[Inference] Starting inference on full test set...")
+    # Model is passed in, assuming weights are loaded
+    
+    dataset, num_samples = testing_dataset_generator(hparas['BATCH_SIZE'])
+    
+    start_time = time.time()
+    
+    for step, (batch_emb, batch_ids) in enumerate(dataset):
+        print(f"Processing batch {step+1}...")
+        batch_size = tf.shape(batch_emb)[0]
+        
+        # Generate images
+        # diffusion_model.generate_images expects (batch_size, diffusion_steps, seq_emb)
+        # We use a reasonable step count for inference (e.g., 50 or 100)
+        diffusion_steps = 30 # Can be increased for better quality
+        generated_images = diffusion_model.generate_images(batch_size, diffusion_steps, batch_emb)
+        
+        # Save images
+        for i in range(batch_size):
+            img = generated_images[i].numpy() # Already [0, 1] from generate_images
+            img_id = batch_ids[i]
+            
+            # Format filename
+            if isinstance(img_id, (int, np.integer)):
+                 filename = f"inference_{img_id:04d}.jpg"
+            else:
+                 filename = f"inference_{img_id}.jpg"
+                 
+            save_path = os.path.join(output_folder, filename)
+            plt.imsave(save_path, img)
+            
+    print(f"[Inference] Finished. Time taken: {time.time() - start_time:.2f}s")
+
+# --- Helper Functions ---
+def decode_caption(caption_ids, id2word_dict):
+    text = []
+    # caption_ids might be numpy array of ints
+    for idx in caption_ids:
+        # Convert to string key for lookup
+        word = id2word_dict.get(str(int(idx)), '')
+        if word and word not in ['<PAD>', '<RARE>', '<start>', '<end>']:
+            text.append(word)
+    return ' '.join(text)
+
+# %%
+def inference_one(idx_to_infer, diffusion_model=None, captions_emb=None, dataset_df=None, id2word_dict=None):
+    """
+    Generate image for a single specific ID from the test set and display it.
+    idx_to_infer can be an integer index or a specific ID string depending on dataset.
+    """
+    print(f"[Inference] Generating one image for ID/Index: {idx_to_infer}...")
+    
+    if diffusion_model is None:
+        diffusion_model = build_diffusion_model()
+        load_checkpoint(diffusion_model, CHECKPOINT_PATH)
+    
+    # Load Data Manually if not provided
+    if captions_emb is None:
+        print("[Inference] Loading embeddings (uncached)...")
+        captions_emb = np.load(SEQ_EMB_PATH)
+        # Fix dims
+        if captions_emb.ndim == 4 and captions_emb.shape[1] == 1:
+            captions_emb = np.squeeze(captions_emb, axis=1)
+        elif captions_emb.ndim == 5 and captions_emb.shape[2] == 1:
+            captions_emb = np.squeeze(captions_emb, axis=2)
+            
+    if dataset_df is None:
+        print("[Inference] Loading dataframe (uncached)...")
+        dataset_df = pd.read_pickle(TEST_DATA_PATH)
+        
+    if id2word_dict is None:
+        print("[Inference] Loading dictionary (uncached)...")
+        if os.path.exists(ID2WORD_PATH):
+            id2word_dict = dict(np.load(ID2WORD_PATH))
+        else:
+            print(f"Warning: {ID2WORD_PATH} not found. Captions will remain encoded.")
+            id2word_dict = {}
+    
+    data = dataset_df # alias
+    
+    # Find the row
+    if 'ID' in data.columns:
+        # Match ID
+        # Convert to same type for comparison
+        ids = data['ID'].values
+        # Try finding index
+        matches = np.where(ids == idx_to_infer)[0]
+        if len(matches) > 0:
+            target_idx = matches[0]
+        else:
+            print(f"ID {idx_to_infer} not found. Using as 0-based index.")
+            target_idx = int(idx_to_infer)
+    else:
+        target_idx = int(idx_to_infer)
+        
+    if target_idx >= len(captions_emb):
+        print(f"Index {target_idx} out of bounds.")
+        return
+
+    target_emb = captions_emb[target_idx]
+    
+    # Get raw caption IDs
+    target_caption_ids = data.iloc[target_idx]['Captions'] if 'Captions' in data.columns else []
+    target_text = decode_caption(target_caption_ids, id2word_dict) if len(target_caption_ids) > 0 else "Unknown"
+    
+    # Add batch dimension
+    target_emb = tf.expand_dims(target_emb, 0) # (1, 77, 768)
+    
+    # Generate
+    diffusion_steps = 50
+    generated_image = diffusion_model.generate_images(1, diffusion_steps, target_emb)
+    generated_image = generated_image[0].numpy()
+    
+    # Display
+    print(f"Caption: {target_text}")
+    print(f"Raw IDs (first 10): {target_caption_ids[:10] if hasattr(target_caption_ids, '__iter__') else target_caption_ids}")
     plt.figure(figsize=(6, 6))
     plt.imshow(generated_image)
     plt.title(f"Generated Image (ID: {idx_to_infer})\n{target_text[:50]}...")
@@ -296,8 +526,15 @@ if __name__ == "__main__":
             all_captions_emb = np.squeeze(all_captions_emb, axis=2)
             
         all_dataset_df = pd.read_pickle(TEST_DATA_PATH)
-        
-        for i in range(10):
-            inference_one(i, diffusion_model=diffusion_model, captions_emb=all_captions_emb, dataset_df=all_dataset_df)    
+    
+        print("[Main] Pre-loading dictionary...")
+        if os.path.exists(ID2WORD_PATH):
+            id2word_dict = dict(np.load(ID2WORD_PATH))
+        else:
+            print(f"Warning: {ID2WORD_PATH} not found.")
+            id2word_dict = {}
+    
+        for i in range(1):
+            inference_one(i, diffusion_model=diffusion_model, captions_emb=all_captions_emb, dataset_df=all_dataset_df, id2word_dict=id2word_dict)    
     else:
-        print(f"Warning: {SEQ_EMB_PATH} not found. Cannot run inference loop.")    
+        print(f"Warning: {SEQ_EMB_PATH} not found. Cannot run inference loop.")
