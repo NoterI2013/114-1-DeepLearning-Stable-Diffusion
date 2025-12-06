@@ -166,13 +166,12 @@ def testing_dataset_generator(batch_size):
 
 # %%
 # --- Inference Functions ---
-def inference_testset(output_folder=OUTPUT_DIR):
+def inference_testset(diffusion_model, output_folder=OUTPUT_DIR):
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
         
     print("[Inference] Starting inference on full test set...")
-    diffusion_model = build_diffusion_model()
-    load_checkpoint(diffusion_model, CHECKPOINT_PATH)
+    # Model is passed in, assuming weights are loaded
     
     dataset, num_samples = testing_dataset_generator(hparas['BATCH_SIZE'])
     
@@ -205,25 +204,32 @@ def inference_testset(output_folder=OUTPUT_DIR):
     print(f"[Inference] Finished. Time taken: {time.time() - start_time:.2f}s")
 
 # %%
-def inference_one(idx_to_infer):
+def inference_one(idx_to_infer, diffusion_model=None, captions_emb=None, dataset_df=None):
     """
     Generate image for a single specific ID from the test set and display it.
     idx_to_infer can be an integer index or a specific ID string depending on dataset.
     """
     print(f"[Inference] Generating one image for ID/Index: {idx_to_infer}...")
     
-    diffusion_model = build_diffusion_model()
-    load_checkpoint(diffusion_model, CHECKPOINT_PATH)
+    if diffusion_model is None:
+        diffusion_model = build_diffusion_model()
+        load_checkpoint(diffusion_model, CHECKPOINT_PATH)
     
-    # Load Data Manually
-    captions_emb = np.load(SEQ_EMB_PATH)
-    # Fix dims
-    if captions_emb.ndim == 4 and captions_emb.shape[1] == 1:
-        captions_emb = np.squeeze(captions_emb, axis=1)
-    elif captions_emb.ndim == 5 and captions_emb.shape[2] == 1:
-        captions_emb = np.squeeze(captions_emb, axis=2)
-        
-    data = pd.read_pickle(TEST_DATA_PATH)
+    # Load Data Manually if not provided
+    if captions_emb is None:
+        print("[Inference] Loading embeddings (uncached)...")
+        captions_emb = np.load(SEQ_EMB_PATH)
+        # Fix dims
+        if captions_emb.ndim == 4 and captions_emb.shape[1] == 1:
+            captions_emb = np.squeeze(captions_emb, axis=1)
+        elif captions_emb.ndim == 5 and captions_emb.shape[2] == 1:
+            captions_emb = np.squeeze(captions_emb, axis=2)
+            
+    if dataset_df is None:
+        print("[Inference] Loading dataframe (uncached)...")
+        dataset_df = pd.read_pickle(TEST_DATA_PATH)
+    
+    data = dataset_df # alias
     
     # Find the row
     if 'ID' in data.columns:
@@ -269,7 +275,29 @@ def inference_one(idx_to_infer):
 
 # %%
 if __name__ == "__main__":
-    # inference_testset()
-    # inference_one(0)
-    for i in range(10):
-        inference_one(i)    
+    # 1. Unified Model Loading
+    print("[Main] Initializing Model...")
+    diffusion_model = build_diffusion_model()
+    load_checkpoint(diffusion_model, CHECKPOINT_PATH)
+    
+    # 2. Choose Mode
+    
+    # --- Mode A: Full Test Set Inference ---
+    # inference_testset(diffusion_model)
+    
+    # --- Mode B: Single/Loop Inference ---
+    # Pre-load data for single inference efficiency (optional for full testset as it uses tf.dataset)
+    print("[Main] Pre-loading data for single inference...")
+    if os.path.exists(SEQ_EMB_PATH):
+        all_captions_emb = np.load(SEQ_EMB_PATH)
+        if all_captions_emb.ndim == 4 and all_captions_emb.shape[1] == 1:
+            all_captions_emb = np.squeeze(all_captions_emb, axis=1)
+        elif all_captions_emb.ndim == 5 and all_captions_emb.shape[2] == 1:
+            all_captions_emb = np.squeeze(all_captions_emb, axis=2)
+            
+        all_dataset_df = pd.read_pickle(TEST_DATA_PATH)
+        
+        for i in range(10):
+            inference_one(i, diffusion_model=diffusion_model, captions_emb=all_captions_emb, dataset_df=all_dataset_df)    
+    else:
+        print(f"Warning: {SEQ_EMB_PATH} not found. Cannot run inference loop.")    
