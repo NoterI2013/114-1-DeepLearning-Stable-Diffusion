@@ -175,7 +175,7 @@ def run_diffusion_training():
     run_preprocessing()
     
     # 2. Load Dataset
-    BATCH_SIZE = 16
+    BATCH_SIZE = 32
     print("[Main] Loading Dataset...")
     dataset, train_data, valid_data = input_pipeline.dataset_generator(
         train_path, BATCH_SIZE, 0.8, save_embeding_path, ROOT
@@ -258,7 +258,7 @@ def run_diffusion_training():
         if current_kid is not None and current_kid < TARGET_KID:
             diffusion_model.plot_images(valid_data)
         else:
-            print(f"💤 KID ({current_kid:.4f}) still high (>= {TARGET_KID}), skipping generation to save time.")
+            print(f"KID ({current_kid:.4f}) still high (>= {TARGET_KID}), skipping generation to save time.")
 
     plot_cb = keras.callbacks.LambdaCallback(on_epoch_end=conditional_plot)
 
